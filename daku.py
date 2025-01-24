@@ -8,7 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from pymongo import MongoClient
 
 # Bot token
-BOT_TOKEN = '7047464931:AAGSJPDzqOLg5yKdCSY8nvf0z69j0n_pxUY'  # Replace with your bot token
+BOT_TOKEN = '7718352742:AAHscDSz2kCnPP8FXHmbQ24T2be3GJfwAv0'  # Replace with your bot token
 
 # Admin ID
 ADMIN_ID = 1944182800
