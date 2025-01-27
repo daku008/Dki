@@ -704,7 +704,7 @@ async def run_attack(ip, port, time_duration, update, user_id):
 
     try:
         # Simulate the attack command with dynamic thread
-        command = f"./soul {ip} {port} {time_duration} {default_thread}"
+        command = f"./soul {ip} {port} {time_duration} {1024} {default_thread}"
         process = subprocess.Popen(command, shell=True)
 
         # Wait for the specified duration
